@@ -27,9 +27,15 @@ The proxy is what allows the one-click app download and update, in-app plugin an
 installs, Obsidian Sync and Publish, and Web viewer pages.
 
 ```sh
-pnpm build
-O4W_SECRET=$(openssl rand -hex 32) PORT=8080 node server/server.js
-# or: docker build -t obsidian4web . && docker run -p 8080:8080 -e O4W_SECRET=... obsidian4web
+docker run -d --name obsidian4web \
+  --restart unless-stopped \
+  -p 127.0.0.1:8080:8080 \
+  -e O4W_SECRET="$(openssl rand -hex 32)" \
+  -e O4W_TRUST_PROXY=1 \
+  ghcr.io/d-513/obsidian4web:latest
+
+# or from source:
+# pnpm build && O4W_SECRET=$(openssl rand -hex 32) PORT=8080 node server/server.js
 ```
 
 Put it behind a TLS reverse proxy that passes WebSockets. Examples are in `deploy/`

@@ -1,9 +1,9 @@
 /// <reference lib="webworker" />
-// Service worker: serves the Obsidian app (from the cached asar) at the origin root,
+// Service worker: serves the Obsidian app (from the cached asar) at the app root,
 // mirroring Electron's app:// protocol, and serves vault files under /_vfs/ by asking
 // the owning page (which holds the VFS in memory).
 
-import { APP_CACHE, ASAR_KEY_PREFIX, CURRENT_KEY, OWN_PREFIX, VFS_PREFIX, mimeFor } from "../common/config";
+import { APP_CACHE, ASAR_KEY_PREFIX, CURRENT_KEY, OWN_PREFIX, VFS_PREFIX, basePath, mimeFor } from "../common/config";
 import { indexFromBlob, type AsarIndex } from "../common/asar";
 
 declare const self: ServiceWorkerGlobalScope;
@@ -78,23 +78,23 @@ self.addEventListener("message", (event) => {
 // the shim can finish async setup (mounting the vault) before Obsidian's code runs.
 const HTML_ENTRY = /\.html?$/i;
 
-function rewriteHtml(html: string, version: string): string {
+function rewriteHtml(html: string, version: string, base: string): string {
   // Turn every <script src=...> into an inert tag that the shim will load in order.
   html = html.replace(/<script\b([^>]*)\bsrc=("[^"]*"|'[^']*')([^>]*)>\s*<\/script>/gi, (_m, a, src, b) => {
     const attrs = `${a} ${b}`.replace(/\btype=("[^"]*"|'[^']*')/i, "");
     return `<script type="o4w/deferred" data-src=${src}${attrs}></script>`;
   });
   const boot =
-    `<script>window.__O4W_VERSION__=${JSON.stringify(version)};</script>` +
-    `<link rel="stylesheet" href="${OWN_PREFIX}shim.css">` +
-    `<link rel="manifest" href="/manifest.webmanifest">` +
-    `<script src="${OWN_PREFIX}shim.js"></script>`;
+    `<script>window.__O4W_VERSION__=${JSON.stringify(version)};window.__O4W_BASE__=${JSON.stringify(base)};</script>` +
+    `<link rel="stylesheet" href="${base}o4w/shim.css">` +
+    `<link rel="manifest" href="${base}manifest.webmanifest">` +
+    `<script src="${base}o4w/shim.js"></script>`;
   // Inject as the very first thing in <head>.
   if (/<head[^>]*>/i.test(html)) return html.replace(/<head([^>]*)>/i, `<head$1>${boot}`);
   return boot + html;
 }
 
-async function serveFromAsar(app: LoadedApp, path: string, request: Request): Promise<Response | null> {
+async function serveFromAsar(app: LoadedApp, path: string, request: Request, base: string): Promise<Response | null> {
   let entry = app.index.files.get(path);
   if (!entry && app.index.dirs.has(path.replace(/\/$/, ""))) {
     entry = app.index.files.get((path ? path.replace(/\/$/, "") + "/" : "") + "index.html");
@@ -109,7 +109,7 @@ async function serveFromAsar(app: LoadedApp, path: string, request: Request): Pr
     "Cross-Origin-Resource-Policy": "same-origin",
   };
   if (HTML_ENTRY.test(path)) {
-    const html = rewriteHtml(await body.text(), app.version);
+    const html = rewriteHtml(await body.text(), app.version, base);
     return new Response(html, { status: 200, headers });
   }
   return rangeResponse(request, body, headers);
@@ -232,7 +232,9 @@ self.addEventListener("fetch", (event) => {
   if (url.origin !== self.location.origin) return;
   if (request.method !== "GET" && request.method !== "HEAD") return;
 
-  const pathname = decodeURIComponent(url.pathname);
+  const base = basePath();
+  const rawPathname = decodeURIComponent(url.pathname);
+  const pathname = rawPathname.startsWith(base) ? "/" + rawPathname.slice(base.length) : rawPathname;
 
   if (pathname.startsWith(VFS_PREFIX)) {
     event.respondWith(serveVfs(event, pathname.slice(VFS_PREFIX.length - 1)));
@@ -268,7 +270,7 @@ self.addEventListener("fetch", (event) => {
     (async () => {
       const app = await loadApp();
       if (app) {
-        const res = await serveFromAsar(app, pathname.replace(/^\/+/, ""), request);
+        const res = await serveFromAsar(app, pathname.replace(/^\/+/, ""), request, base);
         if (res) return res;
       }
       return networkFirst(request);

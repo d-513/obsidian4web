@@ -1,6 +1,7 @@
 // Launcher: installs the service worker and the official Obsidian release (downloaded through
 // the proxy, or from a file the user downloaded themselves), then opens the app.
 
+import { basePath } from "../common/config";
 import {
   canAutoDownload,
   compareVersions,
@@ -42,6 +43,7 @@ function writeConfig(fn: (c: Config) => void) {
 }
 
 function nextUrl(): string {
+  const base = basePath();
   const next = params.get("next");
   if (next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\")) {
     try {
@@ -51,19 +53,21 @@ function nextUrl(): string {
       /* ignore */
     }
   }
+  const rel = location.pathname.startsWith(base) ? location.pathname.slice(base.length) : location.pathname.replace(/^\/+/, "");
   // Direct visit to an app URL without the service worker: the server served the launcher.
-  if (location.pathname !== "/" && location.pathname !== "/index.html") return location.pathname + location.search;
-  if (location.pathname === "/index.html" && location.search) return location.pathname + location.search;
+  if (rel !== "" && rel !== "index.html") return location.pathname + location.search;
+  if (rel === "index.html" && location.search) return location.pathname + location.search;
   const last = localStorage.getItem("o4w-last-vault");
-  if (last && readConfig().vaults?.[last]) return `/index.html?vault=${encodeURIComponent(last)}`;
-  return "/starter.html";
+  if (last && readConfig().vaults?.[last]) return `${base}index.html?vault=${encodeURIComponent(last)}`;
+  return `${base}starter.html`;
 }
 
 const esc = (s: string) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
 const mb = (n: number) => (n / 1048576).toFixed(1);
 
 async function ensureServiceWorker(): Promise<void> {
-  await navigator.serviceWorker.register("/sw.js", { scope: "/" });
+  const base = basePath();
+  await navigator.serviceWorker.register(`${base}sw.js`, { scope: base });
   await navigator.serviceWorker.ready;
   if (!navigator.serviceWorker.controller) {
     await new Promise<void>((resolve) => {
@@ -93,6 +97,10 @@ function unsupported(): string | null {
 }
 
 async function main(): Promise<void> {
+  if (!location.pathname.endsWith("/") && !/\.html?$/i.test(location.pathname)) {
+    location.replace(location.pathname + "/" + location.search + location.hash);
+    return;
+  }
   const missing = unsupported();
   if (missing) {
     app.innerHTML = `<h1>Browser not supported</h1><p>obsidian4web needs a modern browser. Missing: <strong>${esc(missing)}</strong>.</p>`;
@@ -296,7 +304,7 @@ function render(installedVersion: string | null): void {
     for (const k of await caches.keys()) await caches.delete(k);
     localStorage.clear();
     sessionStorage.clear();
-    location.replace("/");
+    location.replace(basePath());
   });
 }
 

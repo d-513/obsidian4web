@@ -1,7 +1,7 @@
 // Emulation of Obsidian's Electron main process (the ipcMain handlers in main.js).
 
 import { Buffer } from "buffer";
-import { VFS_PREFIX } from "../../common/config";
+import { basePath } from "../../common/config";
 import { canAutoDownload, compareVersions, fetchReleaseInfo, installRelease } from "../../common/installer";
 import { vfs, normalize } from "../vfs/vfs";
 import { PATHS } from "../platform";
@@ -23,12 +23,14 @@ export interface IpcEvent {
 type Handler = (event: IpcEvent, ...args: any[]) => unknown;
 
 export const appVersion: string = (window as unknown as { __O4W_VERSION__?: string }).__O4W_VERSION__ ?? "1.0.0";
+const BASE = basePath();
 
 // ---------------------------------------------------------------------------
 // Window context
 
 export const page = (() => {
-  const p = location.pathname.replace(/^\/+/, "");
+  const rel = location.pathname.startsWith(BASE) ? location.pathname.slice(BASE.length) : location.pathname;
+  const p = rel.replace(/^\/+/, "");
   const params = new URLSearchParams(location.search);
   return {
     kind: p === "starter.html" ? "starter" : p === "help.html" ? "help" : "vault",
@@ -43,7 +45,7 @@ export function isNavigating(): boolean {
 }
 
 function vaultUrl(id: string): string {
-  return `/index.html?vault=${encodeURIComponent(id)}`;
+  return `${BASE}index.html?vault=${encodeURIComponent(id)}`;
 }
 
 /** Navigate this tab once pending writes (e.g. a freshly created vault folder) are stored. */
@@ -60,7 +62,7 @@ export function openVault(id: string, opts: { sameTab?: boolean } = {}): void {
 }
 
 export function openStarter(sameTab: boolean): void {
-  if (sameTab || !window.open("/starter.html", "_blank")) navigateTo("/starter.html");
+  if (sameTab || !window.open(`${BASE}starter.html`, "_blank")) navigateTo(`${BASE}starter.html`);
 }
 
 function setVaultOpen(id: string): void {
@@ -110,7 +112,7 @@ export async function checkForUpdate(force = false): Promise<void> {
       } else if (force || localStorage.getItem("o4w-update-noticed") !== info.latestVersion) {
         // Without a proxy the release can't be downloaded from here; send the user to the launcher.
         localStorage.setItem("o4w-update-noticed", info.latestVersion);
-        notice(`Obsidian ${info.latestVersion} is available. Open ${location.origin}/?manage to install it.`, 15000);
+        notice(`Obsidian ${info.latestVersion} is available. Open ${location.origin}${BASE}?manage to install it.`, 15000);
       }
     }
   } catch (e) {
@@ -125,7 +127,7 @@ export async function checkForUpdate(force = false): Promise<void> {
 
 function copyAsarDir(prefix: string, target: string): Promise<void> {
   return (async () => {
-    const res = await fetch("/__o4w/asar-list?prefix=" + encodeURIComponent(prefix));
+    const res = await fetch(`${BASE}__o4w/asar-list?prefix=` + encodeURIComponent(prefix));
     const files = (await res.json()) as string[];
     vfs.mkdir(target, true);
     for (const f of files) {
@@ -133,7 +135,7 @@ function copyAsarDir(prefix: string, target: string): Promise<void> {
       const dest = target + "/" + rel;
       const dir = dest.slice(0, dest.lastIndexOf("/"));
       if (!vfs.exists(dir)) vfs.mkdir(dir, true);
-      const data = new Uint8Array(await (await fetch("/" + f.split("/").map(encodeURIComponent).join("/"))).arrayBuffer());
+      const data = new Uint8Array(await (await fetch(BASE + f.split("/").map(encodeURIComponent).join("/"))).arrayBuffer());
       await vfs.write(dest, data);
     }
   })();
@@ -170,7 +172,7 @@ async function openUrl(event: IpcEvent, url: string): Promise<void> {
   }
   if (scheme === "file") {
     const path = decodeURIComponent(url.replace(/^file:(\/\/)?/, "").split("#")[0]);
-    if (vfs.exists(path)) event.win.open(VFS_PREFIX + path.replace(/^\/+/, ""), "_blank");
+    if (vfs.exists(path)) event.win.open(BASE + "_vfs/" + path.replace(/^\/+/, ""), "_blank");
     return;
   }
   const cfg = loadConfig();
@@ -239,7 +241,7 @@ export const handlers: Record<string, Handler> = {
   "is-closing": (e) => (e.returnValue = isNavigating()),
   "desktop-dir": (e) => (e.returnValue = PATHS.desktop),
   "documents-dir": (e) => (e.returnValue = PATHS.documents),
-  resources: (e) => (e.returnValue = "/"),
+  resources: (e) => (e.returnValue = BASE.replace(/\/$/, "") || "/"),
   version: (e) => (e.returnValue = appVersion),
   policy: (e) =>
     (e.returnValue = { plugins: true, themes: true, snippets: true, sync: true, publish: true, webViewer: true, devTools: true, insider: false }),
@@ -250,12 +252,11 @@ export const handlers: Record<string, Handler> = {
     });
     e.returnValue = null;
   },
-  "file-url": (e) => (e.returnValue = location.origin + VFS_PREFIX),
+  "file-url": (e) => (e.returnValue = location.origin + BASE + "_vfs/"),
   relaunch: (e) => {
     e.returnValue = "";
     navigating = true;
     void vfs.flush().then(() => location.reload());
-
   },
   update: (e) => (e.returnValue = update.state),
   "latest-public-version": (e) => (e.returnValue = update.latest),
@@ -372,7 +373,7 @@ export const handlers: Record<string, Handler> = {
   },
   help: (e) => {
     e.returnValue = null;
-    window.open("/help.html", "_blank");
+    window.open(`${BASE}help.html`, "_blank");
   },
   sandbox: (e) => {
     e.returnValue = null;
@@ -438,7 +439,7 @@ export const handlers: Record<string, Handler> = {
 };
 
 export function applyFavicon(doc: Document): void {
-  const icon = localStorage.getItem("o4w-icon") || "/icon.png";
+  const icon = localStorage.getItem("o4w-icon") || `${BASE}icon.png`;
   let link = doc.querySelector('link[rel="icon"]') as HTMLLinkElement | null;
   if (!link) {
     link = doc.createElement("link");

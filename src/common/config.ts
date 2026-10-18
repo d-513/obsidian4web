@@ -12,6 +12,46 @@ export const WS_PROXY_PREFIX = "/__wsproxy";
 export const RELEASES_URL =
   "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/desktop-releases.json";
 
+function ensureSlashes(p: string): string {
+  if (!p.startsWith("/")) p = "/" + p;
+  return p.endsWith("/") ? p : p + "/";
+}
+
+/**
+ * Base URL pathname of this deployment (always starts and ends with "/", e.g. "/" or "/obsidian4web/app/").
+ */
+export function basePath(): string {
+  const g = globalThis as {
+    __O4W_BASE__?: string;
+    registration?: { scope?: string };
+    navigator?: { serviceWorker?: { controller?: { scriptURL?: string } | null } };
+    location?: { href: string; pathname: string };
+  };
+  if (typeof g.__O4W_BASE__ === "string" && g.__O4W_BASE__) return ensureSlashes(g.__O4W_BASE__);
+  if (g.registration?.scope) {
+    try {
+      return ensureSlashes(new URL(g.registration.scope).pathname);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (g.navigator?.serviceWorker?.controller?.scriptURL) {
+    try {
+      return ensureSlashes(new URL("./", g.navigator.serviceWorker.controller.scriptURL).pathname);
+    } catch {
+      /* ignore */
+    }
+  }
+  if (g.location?.href) {
+    try {
+      return ensureSlashes(new URL("./", g.location.href).pathname);
+    } catch {
+      /* ignore */
+    }
+  }
+  return "/";
+}
+
 export interface InstalledVersion {
   version: string;
   installedAt: number;

@@ -2,6 +2,7 @@
 // HTML pages. Sets up the Node/Electron environment synchronously, mounts storage
 // asynchronously, then loads Obsidian's own scripts in their original order.
 
+import { basePath } from "../common/config";
 import { installGlobals } from "./globals";
 import { makeRequire } from "./require";
 import { patchNetwork } from "./net/net";
@@ -25,6 +26,7 @@ type AnyWin = Window & typeof globalThis;
 // Synchronous environment
 
 function setupWindow(win: AnyWin): void {
+  (win as unknown as { __O4W_BASE__?: string }).__O4W_BASE__ = basePath();
   installGlobals(win);
   patchNetwork(win);
   (win as unknown as { require: unknown }).require = makeRequire(win);
@@ -262,9 +264,10 @@ function loadDeferredScripts(): void {
 }
 
 async function boot(): Promise<void> {
+  const base = basePath();
   if (!navigator.serviceWorker?.controller) {
     // Opened without the service worker (e.g. hard reload); let the launcher fix it.
-    location.replace("/?next=" + encodeURIComponent(location.pathname + location.search));
+    location.replace(base + "?next=" + encodeURIComponent(location.pathname + location.search));
     return;
   }
   const caps = detectProxy().then((c) => (c.proxy ? ensureSession() : false));
@@ -273,18 +276,18 @@ async function boot(): Promise<void> {
   const cfg = loadConfig();
 
   if (!cfg.termsAccepted) {
-    location.replace("/");
+    location.replace(base);
     return;
   }
 
   if (page.kind === "vault") {
     const vault = page.vaultId ? cfg.vaults[page.vaultId] : undefined;
     if (!vault) {
-      location.replace("/starter.html");
+      location.replace(base + "starter.html");
       return;
     }
     if (!(await mountFolderFor(vault.path))) {
-      location.replace("/starter.html");
+      location.replace(base + "starter.html");
       return;
     }
     // Config files are read synchronously by some code paths (and many plugins).

@@ -8,7 +8,7 @@ import { popupMenu, performRole, type MenuTemplateItem } from "../ui/ui";
 import { process } from "../globals";
 import { PATHS } from "../platform";
 import { vfs, normalize } from "../vfs/vfs";
-import { VFS_PREFIX } from "../../common/config";
+import { basePath } from "../../common/config";
 
 // ---------------------------------------------------------------------------
 // ipcRenderer (one per tab; popout windows share it)
@@ -225,7 +225,7 @@ const shell = {
   async openPath(path: string) {
     path = normalize(path);
     if (!vfs.exists(path)) return "File not found";
-    window.open(VFS_PREFIX + path.slice(1).split("/").map(encodeURIComponent).join("/"), "_blank");
+    window.open(basePath() + "_vfs/" + path.slice(1).split("/").map(encodeURIComponent).join("/"), "_blank");
     return "";
   },
   showItemInFolder(path: string) {

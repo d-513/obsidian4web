@@ -60,6 +60,7 @@ function o4w(): Plugin {
 }
 
 export default defineConfig({
+  base: "./",
   plugins: [o4w()],
   server: { port: 5173, strictPort: true },
   build: { target: "es2022" },

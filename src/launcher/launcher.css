@@ -80,3 +80,30 @@ button:disabled { opacity: 0.5; cursor: not-allowed; }
   border-radius: 50%; animation: spin 0.8s linear infinite;
 }
 @keyframes spin { to { transform: rotate(360deg); } }
+button.link {
+  border: 0;
+  padding: 10px 4px;
+  color: var(--accent);
+  font-weight: 500;
+  background: none;
+}
+button.link:hover { text-decoration: underline; }
+.row + .row { margin-top: 10px; }
+.manual { margin-top: 6px; }
+.manual ol { padding-left: 20px; margin: 8px 0 14px; font-size: 14px; line-height: 1.6; color: var(--muted); }
+.manual ol a { font-family: ui-monospace, Menlo, monospace; font-size: 13px; }
+.drop {
+  display: block;
+  border: 1.5px dashed var(--border);
+  border-radius: 10px;
+  padding: 22px;
+  text-align: center;
+  font-size: 14px;
+  color: var(--muted);
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+.drop:hover, .drop:focus-visible, .drop.over { border-color: var(--accent); background: color-mix(in srgb, var(--card) 90%, var(--accent) 10%); outline: none; }
+.drop.disabled { opacity: 0.5; pointer-events: none; }
+.meta span + span { margin-left: 0; }
+[hidden] { display: none !important; }

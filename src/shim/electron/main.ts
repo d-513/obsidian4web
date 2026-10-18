@@ -2,13 +2,13 @@
 
 import { Buffer } from "buffer";
 import { VFS_PREFIX } from "../../common/config";
-import { compareVersions, fetchReleaseInfo, installRelease } from "../../common/installer";
+import { canAutoDownload, compareVersions, fetchReleaseInfo, installRelease } from "../../common/installer";
 import { vfs, normalize } from "../vfs/vfs";
 import { PATHS } from "../platform";
 import { loadConfig, queueVaultAction, randomId, updateConfig } from "../state";
 import { proxyRequest } from "../net/net";
 import { dialog, messageBox } from "../ui/dialogs";
-import { popupMenu, type MenuTemplateItem } from "../ui/ui";
+import { notice, popupMenu, type MenuTemplateItem } from "../ui/ui";
 
 export const TERMS =
   "I understand and agree that I am not allowed to distribute the Obsidian application, in any form, without explicit approval from the Obsidian team. I also understand that Obsidian is a registered trademark, and I cannot use it without explicit permission granted by the Obsidian team.";
@@ -104,8 +104,14 @@ export async function checkForUpdate(force = false): Promise<void> {
     const info = await fetchReleaseInfo();
     update.latest = info.latestVersion;
     if (compareVersions(info.latestVersion, appVersion) > 0) {
-      await installRelease(info);
-      update.state = "update-downloaded";
+      if (await canAutoDownload(info)) {
+        await installRelease(info);
+        update.state = "update-downloaded";
+      } else if (force || localStorage.getItem("o4w-update-noticed") !== info.latestVersion) {
+        // Without a proxy the release can't be downloaded from here; send the user to the launcher.
+        localStorage.setItem("o4w-update-noticed", info.latestVersion);
+        notice(`Obsidian ${info.latestVersion} is available. Open ${location.origin}/?manage to install it.`, 15000);
+      }
     }
   } catch (e) {
     console.warn("[o4w] update check failed", e);

@@ -7,19 +7,14 @@ export const CURRENT_KEY = "/__o4w/current";
 export const VFS_PREFIX = "/_vfs/";
 /** Our own static assets (shim bundle etc.). */
 export const OWN_PREFIX = "/o4w/";
-export const PROXY_PREFIX = "/__proxy/";
-export const WS_PROXY_PREFIX = "/__wsproxy/";
+export const PROXY_PREFIX = "/__proxy";
+export const WS_PROXY_PREFIX = "/__wsproxy";
 export const RELEASES_URL =
   "https://raw.githubusercontent.com/obsidianmd/obsidian-releases/master/desktop-releases.json";
 
 export interface InstalledVersion {
   version: string;
   installedAt: number;
-}
-
-/** Build a URL that goes through our CORS proxy. */
-export function proxied(url: string): string {
-  return PROXY_PREFIX + url;
 }
 
 export const MIME: Record<string, string> = {

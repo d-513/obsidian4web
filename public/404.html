@@ -1,0 +1,8 @@
+<!doctype html>
+<meta charset="utf-8" />
+<title>obsidian4web</title>
+<script>
+  // Static hosts serve this for unknown paths (e.g. Obsidian's /starter.html before the
+  // service worker is active). Hand over to the launcher, which comes back afterwards.
+  location.replace("/?next=" + encodeURIComponent(location.pathname + location.search));
+</script>

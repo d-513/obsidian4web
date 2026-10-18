@@ -7,13 +7,15 @@
     "dev": "vite",
     "build": "vite build",
     "start": "node server/server.js",
-    "typecheck": "tsc --noEmit"
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/*.test.js"
   },
   "dependencies": {
     "@noble/hashes": "^2.4.0",
     "buffer": "^6.0.3",
     "events": "^3.3.0",
     "path-browserify": "^1.0.1",
+    "undici": "^8.12.2",
     "ws": "^8.22.0"
   },
   "devDependencies": {
@@ -23,5 +25,8 @@
     "esbuild": "^0.28.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.4"
+  },
+  "engines": {
+    "node": ">=20.18"
   }
 }

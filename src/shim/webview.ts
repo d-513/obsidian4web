@@ -4,15 +4,14 @@
 // navigation, title and favicons, and executes requests such as executeJavaScript.
 
 import { EventEmitter } from "events";
-import { PROXY_PREFIX } from "../common/config";
+import { pageProxyUrl, proxyCaps } from "../common/proxy-client";
 import { registerWebContents } from "./electron/renderer";
 
 export const TAG = "o4w-webview";
 const SANDBOX = "allow-scripts allow-forms allow-popups allow-popups-to-escape-sandbox allow-modals allow-downloads";
-
-function pageUrl(url: string): string {
-  return `${PROXY_PREFIX}?mode=page&url=${encodeURIComponent(url)}`;
-}
+// Direct (unproxied) frames keep their real, foreign origin, so the page can work normally
+// without ever being same-origin with us.
+const SANDBOX_DIRECT = SANDBOX + " allow-same-origin";
 
 export function defineWebview(win: Window): void {
   const w = win as Window & typeof globalThis;
@@ -124,7 +123,15 @@ export function defineWebview(win: Window): void {
       this.gotBridge = false;
       this.fire("did-start-navigation", { url, isMainFrame: true, isInPlace: false });
       this.fire("did-start-loading");
-      this.frame.src = pageUrl(url);
+      if (proxyCaps().webviewer) {
+        this.frame.setAttribute("sandbox", SANDBOX);
+        this.frame.src = pageProxyUrl(url);
+      } else {
+        // No proxy: frame the site directly (works for sites that allow being framed).
+        if (new URL(url).origin === location.origin) return;
+        this.frame.setAttribute("sandbox", SANDBOX_DIRECT);
+        this.frame.src = url;
+      }
     }
 
     private onFrameLoad() {
@@ -190,6 +197,7 @@ export function defineWebview(win: Window): void {
     }
 
     private command(cmd: string, args: Record<string, unknown> = {}): Promise<unknown> {
+      if (!this.gotBridge) return Promise.reject(new Error("This page can't be scripted (opened without the proxy, or not an HTML page)"));
       const target = this.frame.contentWindow;
       if (!target) return Promise.reject(new Error("webview not ready"));
       const id = ++this.seq;

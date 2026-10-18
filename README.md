@@ -6,21 +6,87 @@ straight from Obsidian's GitHub releases after the user accepts Obsidian's terms
 published in `desktop-releases.json` is checked. A compatibility layer then stands in for
 Electron and Node.js.
 
-## Running
+## Running locally
 
 ```sh
 pnpm install
-pnpm dev                 # http://localhost:5173 (Vite + proxy)
-
-pnpm build && pnpm start # production: static files + proxy on $PORT (default 8080)
+pnpm dev                       # http://localhost:5173 with the proxy (allowlist mode)
+O4W_PROXY_MODE=open pnpm dev   # same, with any public host allowed (enables Web viewer pages)
+pnpm test                      # proxy hardening tests
 ```
 
-The site must be served over HTTPS (or `localhost`), because service workers require a secure context.
+## Deploying
 
-Proxy options (environment variables for `server/server.js`):
+There are two ways to deploy. Either way the site needs HTTPS (service workers require a
+secure context), and any number of hostnames can serve it. Each hostname is a separate
+browser origin, so each has its own vaults and settings.
 
-- `O4W_PROXY_ALLOW_HOSTS=".obsidian.md,.github.com,..."`: only allow these destinations.
-- `O4W_PROXY_ALLOW_PRIVATE=1`: allow requests to private/loopback addresses (off by default).
+### A. With the proxy (recommended)
+
+The proxy is what allows the one-click app download and update, in-app plugin and theme
+installs, Obsidian Sync and Publish, and Web viewer pages.
+
+```sh
+pnpm build
+O4W_SECRET=$(openssl rand -hex 32) PORT=8080 node server/server.js
+# or: docker build -t obsidian4web . && docker run -p 8080:8080 -e O4W_SECRET=... obsidian4web
+```
+
+Put it behind a TLS reverse proxy that passes WebSockets. Examples are in `deploy/`
+(`Caddyfile`, `nginx.conf`, `docker-compose.yml`). Set `O4W_TRUST_PROXY=1` so that
+`X-Forwarded-Host` and `X-Forwarded-For` are honoured.
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `O4W_SECRET` | random per start | HMAC key for session cookies. Set it in production (and share it between instances). |
+| `O4W_PROXY_MODE` | `allowlist` | `allowlist`: Obsidian's services and GitHub only. `open`: any public host. `off`: no proxy. |
+| `O4W_PROXY_ALLOW_HOSTS` | | Extra destinations, e.g. `.openai.com,api.anthropic.com` for plugins that call those APIs. `.example.com` matches subdomains. |
+| `O4W_PROXY_WEBVIEWER` | on only in `open` | Allow Web viewer pages for any public host (GET, sandboxed). Without it, the Web viewer frames sites directly. |
+| `O4W_TRUST_PROXY` | `0` | Trust `X-Forwarded-*` from your reverse proxy. Only enable it behind one. |
+| `O4W_ALLOWED_ORIGINS` | | Extra origins allowed to use the proxy, besides each request's own host. |
+| `O4W_RATE_LIMIT_RPM` | `300` | Requests per minute, per IP and per session. |
+| `O4W_RATE_LIMIT_MB_PER_HOUR` | `2048` | Transfer quota per IP and per session. |
+| `O4W_MAX_CONCURRENT` | `24` | Concurrent proxied requests per IP and per session. |
+| `O4W_MAX_REQUEST_MB` / `O4W_MAX_RESPONSE_MB` | `64` / `200` | Body size limits. |
+| `O4W_TIMEOUT_S` | `120` | Upstream timeout. |
+| `O4W_MAX_WEBSOCKETS` | `8` | Open WebSockets (Sync) per IP and per session. |
+| `O4W_TOKEN_TTL_HOURS` | `24` | Session cookie lifetime (renewed automatically). |
+| `O4W_PROXY_ALLOW_PRIVATE` | `0` | Allow private/loopback destinations (only for trusted, self-hosted setups). |
+| `O4W_PROXY_LOG` | `0` | Log proxied requests. |
+
+#### Why it isn't an open relay
+
+- **Only this site's pages can use it.**
+  - Requests must come from the same origin: `Origin`, or `Sec-Fetch-Site: same-origin`.
+  - They must carry an `X-O4W-Proxy` header. Browsers can't send a custom header cross-site without a CORS preflight, and the proxy never approves one.
+  - They need a signed, HttpOnly, `SameSite=Strict` session cookie, which the site only issues to its own pages.
+  - WebSocket handshakes must come from an allowed `Origin`.
+- **Destinations are restricted.**
+  - The allowlist is on by default. Private and loopback addresses are always refused, unless explicitly allowed.
+  - The DNS answer is checked when connecting, which stops DNS rebinding.
+  - Every redirect hop is checked against the policy again.
+- **Abuse is bounded.** Requests, bytes, concurrency and WebSockets are limited per IP and per session, plus size limits and timeouts.
+- **Proxied content can't touch the site.** Responses carry `Content-Security-Policy: sandbox` (an opaque origin), so a proxied page can never run with the site's origin. No cookies are passed through in either direction.
+
+Rate limits are kept in memory per process. If you run several instances, also rate-limit
+at the load balancer.
+
+### B. Static hosting, no proxy
+
+`dist/` works on any static host (GitHub Pages, Netlify, Cloudflare Pages, S3…).
+`404.html` and `_headers` are included. With no proxy, the launcher asks the user to
+download `obsidian-x.y.z.asar.gz` from Obsidian's GitHub releases and drop it in. The file
+is checked against the SHA-256 hash Obsidian publishes, and its version is read from the
+archive. Everything that works offline works: editing, all core plugins, local and on-disk
+vaults, popouts, and themes and plugins that are already installed.
+
+Without a proxy:
+
+- **Not available:** one-click install and update (the launcher shows the file flow, and the app shows a notice when an update exists), and in-app plugin and theme installs. GitHub release downloads don't allow cross-origin requests.
+- **Not available:** Sync and Publish. Obsidian's API doesn't allow cross-origin requests.
+- **Install plugins manually** by copying their files into `.obsidian/plugins/<id>/` of a vault opened from a folder on disk.
+- **Web viewer:** frames sites directly, which works for sites that allow being framed. Reader mode is unavailable.
+- **Plugin network requests** work only for APIs that send CORS headers.
 
 ## How it works
 
@@ -41,16 +107,10 @@ server/proxy.js ── CORS proxy for requestUrl/fetch (+ WebSocket proxy for Sy
 | Dialogs | Sync dialogs (`showOpenDialogSync`) use a replay trick: start the async browser picker, then re-run the click that opened the dialog with the result. Save dialogs write to `/downloads`, which become browser downloads. |
 | Popout windows | Real browser popups. Their resources are routed through the main window, because `about:blank` popups are not controlled by the service worker. |
 | Web viewer | `<webview>` is replaced by a sandboxed iframe that loads pages through the proxy. A bridge script handles navigation, title, favicon, reader mode and `executeJavaScript`. |
-| Network | `requestUrl` always goes through the proxy. `fetch` falls back to the proxy on CORS failure (GET). `*.obsidian.md` traffic and WebSockets are always proxied, with `Origin: app://obsidian.md`. |
+| Network | The client asks `/__proxy/health` what the server offers. `requestUrl` goes through the proxy when the destination is allowed, otherwise direct. `fetch` falls back to the proxy on CORS failure (GET). Obsidian and GitHub traffic, and Sync WebSockets, are proxied with `Origin: app://obsidian.md`. |
 
 Storage layout (virtual paths): vaults in browser storage live in `/vaults/<name>`, and local
 folders are mounted at `/mnt/<id>/<folder>`. App state lives in `localStorage` (`o4w-config`).
-
-## Security notes
-
-- Proxied responses carry `Content-Security-Policy: sandbox`, so proxied content can never run with this site's origin, where it could read the vaults.
-- The proxy and WebSocket proxy reject cross-site use, and refuse private network destinations unless explicitly allowed.
-- Web viewer pages run in an opaque-origin sandboxed iframe.
 
 ## Known limitations
 

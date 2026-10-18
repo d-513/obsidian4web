@@ -1,0 +1,12 @@
+services:
+  obsidian4web:
+    build: ..
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8080:8080"
+    environment:
+      O4W_SECRET: ${O4W_SECRET:?set O4W_SECRET to a long random string}
+      O4W_TRUST_PROXY: "1"
+      O4W_PROXY_MODE: allowlist
+      # O4W_PROXY_ALLOW_HOSTS: ".openai.com,api.anthropic.com"   # hosts your plugins need
+      # O4W_PROXY_WEBVIEWER: "1"

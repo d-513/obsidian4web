@@ -15,6 +15,7 @@ import { PATHS } from "./platform";
 import { addFolder, folderIdOf, folderMountPath, getFolder, loadConfig, takeVaultActions } from "./state";
 import { page, isNavigating, applyFavicon, checkForUpdate, deliverAction, handleObsidianUrl } from "./electron/main";
 import { showModal } from "./ui/ui";
+import { detectProxy, ensureSession } from "../common/proxy-client";
 import { setupPopout } from "./popout";
 import { defineWebview } from "./webview";
 
@@ -266,7 +267,9 @@ async function boot(): Promise<void> {
     location.replace("/?next=" + encodeURIComponent(location.pathname + location.search));
     return;
   }
+  const caps = detectProxy().then((c) => (c.proxy ? ensureSession() : false));
   await mountBase();
+  await caps;
   const cfg = loadConfig();
 
   if (!cfg.termsAccepted) {

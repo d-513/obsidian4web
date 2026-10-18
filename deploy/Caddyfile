@@ -1,0 +1,9 @@
+# Several hostnames can point at the same instance; each is its own origin (separate storage).
+notes.example.com, obsidian.example.org {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8080 {
+		# Pass the original host so the proxy's same-origin checks work behind Caddy.
+		header_up X-Forwarded-Host {host}
+		header_up X-Forwarded-Proto {scheme}
+	}
+}

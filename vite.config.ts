@@ -1,6 +1,7 @@
 import { defineConfig, type Plugin } from "vite";
 import { build as esbuild, type BuildOptions } from "esbuild";
-import { handleProxyRequest, attachWebSocketProxy } from "./server/proxy.js";
+import { createProxy } from "./server/proxy.js";
+import { loadConfig } from "./server/config.js";
 
 // The shim and service worker are classic (non-module) scripts with fixed URLs,
 // so they are bundled with esbuild instead of going through Vite's module graph.
@@ -27,10 +28,12 @@ function o4w(): Plugin {
   return {
     name: "obsidian4web",
     configureServer(server) {
-      if (server.httpServer) attachWebSocketProxy(server.httpServer);
+      // Same proxy as production; O4W_* environment variables apply (see README).
+      const proxy = createProxy(loadConfig({ O4W_SECRET: "dev-only-secret", ...process.env }));
+      if (server.httpServer) proxy.attach(server.httpServer);
       server.middlewares.use(async (req, res, next) => {
         try {
-          if (await handleProxyRequest(req, res)) return;
+          if (await proxy.handle(req, res)) return;
           const path = (req.url ?? "").split("?")[0];
           if (path in extraBundles) {
             const code = await bundle(path, false);

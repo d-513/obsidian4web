@@ -110,7 +110,7 @@ const DROP_RESPONSE_HEADERS = new Set([
   "link",
 ]);
 
-const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE"]);
+const METHODS = new Set(["GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "OPTIONS", "PROPFIND", "PROPPATCH", "MKCOL", "COPY", "MOVE", "LOCK", "UNLOCK"]);
 
 class HttpError extends Error {
   constructor(status, message) {

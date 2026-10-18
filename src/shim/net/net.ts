@@ -12,6 +12,16 @@ function isCrossOriginHttp(url: URL): boolean {
   return (url.protocol === "http:" || url.protocol === "https:") && url.origin !== location.origin;
 }
 
+function shouldPreferProxy(url: URL): boolean {
+  if (PREFER_PROXY.some((re) => re.test(url.hostname))) return true;
+  // In allowlist mode, proxyAllows(url) is only true for Obsidian/GitHub and hosts the
+  // operator explicitly added to O4W_PROXY_ALLOW_HOSTS (e.g. self-hosted sync/AI servers).
+  if (proxyCaps().mode === "allowlist") return true;
+  // Plain HTTP from an HTTPS page would be blocked by the browser as mixed content unless proxied.
+  if (location.protocol === "https:" && (url.protocol === "http:" || url.protocol === "ws:")) return true;
+  return false;
+}
+
 export interface ProxyRequest {
   url: string;
   method?: string;
@@ -104,12 +114,12 @@ export function patchNetwork(win: Window & typeof globalThis): void {
     }
     if (!isCrossOriginHttp(url) || !proxyAllows(url)) return origFetch(input, init);
     const req = new Request(input, init);
-    if (PREFER_PROXY.some((re) => re.test(url.hostname))) return viaProxy(req, url);
-    const retry = req.method === "GET" || req.method === "HEAD" ? req.clone() : null;
+    if (shouldPreferProxy(url)) return viaProxy(req, url);
+    const retry = req.clone();
     try {
       return await origFetch(req);
     } catch (e) {
-      if (!retry || (e as Error).name === "AbortError") throw e;
+      if ((e as Error).name === "AbortError") throw e;
       return viaProxy(retry, url);
     }
   } as typeof fetch;
@@ -121,7 +131,7 @@ export function patchNetwork(win: Window & typeof globalThis): void {
     this.__o4wProxied = false;
     try {
       const u = new URL(String(url), win.location.href);
-      if (isCrossOriginHttp(u) && proxyAllows(u) && PREFER_PROXY.some((re) => re.test(u.hostname))) {
+      if (isCrossOriginHttp(u) && proxyAllows(u) && shouldPreferProxy(u)) {
         url = `/__proxy?url=${encodeURIComponent(u.href)}`;
         this.__o4wProxied = true;
       }
@@ -147,8 +157,8 @@ export function patchNetwork(win: Window & typeof globalThis): void {
       let target = String(url);
       try {
         const u = new URL(target);
-        const asHttp = new URL(u.href.replace(/^ws/, "http"));
-        if (u.host !== win.location.host && proxyAllows(asHttp) && PREFER_PROXY.some((re) => re.test(u.hostname))) {
+        const asHttp = new URL(u.href.replace(/^ws/i, "http"));
+        if (u.host !== win.location.host && proxyAllows(asHttp) && (shouldPreferProxy(asHttp) || (u.protocol === "ws:" && win.location.protocol === "https:"))) {
           const scheme = win.location.protocol === "https:" ? "wss:" : "ws:";
           target = `${scheme}//${win.location.host}${WS_PROXY_PREFIX}?url=${encodeURIComponent(u.href)}`;
         }

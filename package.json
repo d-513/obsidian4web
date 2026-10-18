@@ -1,0 +1,27 @@
+{
+  "name": "obsidian4web",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "start": "node server/server.js",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "@noble/hashes": "^2.4.0",
+    "buffer": "^6.0.3",
+    "events": "^3.3.0",
+    "path-browserify": "^1.0.1",
+    "ws": "^8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.5",
+    "@types/path-browserify": "^1.0.3",
+    "@types/ws": "^8.18.2",
+    "esbuild": "^0.28.2",
+    "typescript": "^7.0.2",
+    "vite": "^8.3.4"
+  }
+}

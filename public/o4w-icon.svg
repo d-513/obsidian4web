@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+  <rect width="512" height="512" rx="112" fill="#1e1b2e"/>
+  <path d="M256 92 L372 196 L332 420 L180 420 L140 196 Z" fill="#8b6cef"/>
+  <path d="M256 92 L332 420 L180 420 Z" fill="#a993f5" opacity=".75"/>
+  <text x="256" y="300" font-family="ui-monospace,Menlo,monospace" font-size="72" font-weight="700" fill="#fff" text-anchor="middle">web</text>
+</svg>

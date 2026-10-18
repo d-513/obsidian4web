@@ -1,0 +1,12 @@
+{
+  "name": "obsidian4web",
+  "short_name": "o4w",
+  "description": "Run the official Obsidian app in your browser.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "display_override": ["window-controls-overlay", "standalone"],
+  "background_color": "#1e1e1e",
+  "theme_color": "#1e1e1e",
+  "icons": [{ "src": "/o4w-icon.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

@@ -13,6 +13,16 @@ const SANDBOX = "allow-scripts allow-forms allow-popups allow-popups-to-escape-s
 // without ever being same-origin with us.
 const SANDBOX_DIRECT = SANDBOX + " allow-same-origin";
 
+function safeHttpUrl(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  try {
+    const u = new URL(raw);
+    return u.protocol === "http:" || u.protocol === "https:" ? u.href : null;
+  } catch {
+    return null;
+  }
+}
+
 export function defineWebview(win: Window): void {
   const w = win as Window & typeof globalThis;
   if (w.customElements.get(TAG)) return;
@@ -102,17 +112,13 @@ export function defineWebview(win: Window): void {
     }
 
     private navigate(url: string, push: boolean) {
-      if (!/^https?:/i.test(url)) {
-        if (url === "about:blank") {
-          this.frame.removeAttribute("src");
-          return;
-        }
-        try {
-          url = new URL(url).href;
-        } catch {
-          return;
-        }
+      if (url === "about:blank") {
+        this.frame.removeAttribute("src");
+        return;
       }
+      const valid = safeHttpUrl(url);
+      if (!valid) return;
+      url = valid;
       if (push) {
         this.history = this.history.slice(0, this.index + 1);
         this.history.push(url);
@@ -159,18 +165,20 @@ export function defineWebview(win: Window): void {
       }
       if (!m?.o4wWebview) return;
       switch (m.type) {
-        case "dom-ready":
+        case "dom-ready": {
           this.gotBridge = true;
-          if (typeof m.url === "string" && m.url !== this.currentUrl) {
+          const next = safeHttpUrl(m.url);
+          if (next && next !== this.currentUrl) {
             // Redirect.
-            this.currentUrl = m.url;
-            this.history[this.index] = m.url;
-            this.fire("did-redirect-navigation", { url: m.url, isMainFrame: true });
+            this.currentUrl = next;
+            this.history[this.index] = next;
+            this.fire("did-redirect-navigation", { url: next, isMainFrame: true });
           }
           this.fire("did-navigate", { url: this.currentUrl });
           if (this.zoom !== 1) this.command("zoom", { factor: this.zoom }).catch(() => {});
           this.fire("dom-ready");
           break;
+        }
         case "page-title-updated":
           this.pageTitle = String(m.title ?? "");
           this.fire("page-title-updated", { title: this.pageTitle, explicitSet: true });
@@ -181,18 +189,26 @@ export function defineWebview(win: Window): void {
         case "did-finish-load":
           this.fire("did-finish-load");
           break;
-        case "did-navigate-in-page":
-          this.currentUrl = String(m.url);
+        case "did-navigate-in-page": {
+          const next = safeHttpUrl(m.url);
+          if (!next) break;
+          this.currentUrl = next;
           this.history[this.index] = this.currentUrl;
           this.fire("did-navigate-in-page", { url: this.currentUrl, isMainFrame: true });
           break;
-        case "navigate":
-          this.navigate(String(m.url), true);
+        }
+        case "navigate": {
+          const next = safeHttpUrl(m.url);
+          if (next) this.navigate(next, true);
           break;
-        case "new-window":
-          this.fire("new-window", { url: m.url, disposition: "foreground-tab" });
-          w.open(String(m.url), "_blank", "noopener");
+        }
+        case "new-window": {
+          const next = safeHttpUrl(m.url);
+          if (!next) break;
+          this.fire("new-window", { url: next, disposition: "foreground-tab" });
+          w.open(next, "_blank", "noopener");
           break;
+        }
       }
     }
 

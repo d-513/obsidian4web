@@ -1,6 +1,8 @@
 // In-memory per-client rate limiting (requests/minute, bytes/hour, concurrency).
 // Single-process: when running several instances, put a shared limiter in front.
 
+const MAX_CLIENTS = 50000;
+
 export class RateLimiter {
   constructor(limits) {
     this.limits = limits;
@@ -13,6 +15,17 @@ export class RateLimiter {
     let c = this.clients.get(key);
     const now = Date.now();
     if (!c) {
+      if (this.clients.size >= MAX_CLIENTS) {
+        this.cleanup();
+        if (this.clients.size >= MAX_CLIENTS) {
+          for (const [k, v] of this.clients) {
+            if (v.active === 0 && v.ws === 0) {
+              this.clients.delete(k);
+              break;
+            }
+          }
+        }
+      }
       c = { tokens: this.limits.requestsPerMinute, refilled: now, bytes: 0, windowStart: now, active: 0, ws: 0, seen: now };
       this.clients.set(key, c);
     }

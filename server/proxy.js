@@ -22,6 +22,8 @@ import { injectBridge } from "./bridge.js";
 
 const OBSIDIAN_HOST = /(^|\.)obsidian\.md$/i;
 const OBSIDIAN_ORIGIN = "app://obsidian.md";
+const HEADER_NAME_RE = /^[!#$%&'*+\-.^_`|~0-9a-z]+$/;
+const MAX_PAGE_HTML_BYTES = 16 * 1048576;
 
 // Response CSP: proxied content must never run with this site's origin.
 const SANDBOX_STRICT = "sandbox";
@@ -59,6 +61,28 @@ const DROP_REQUEST_HEADERS = new Set([
   "sec-ch-ua-platform",
   "upgrade-insecure-requests",
   "priority",
+]);
+
+// Headers that cannot be smuggled even via X-O4W-Headers (hop-by-hop & proxy forwarding).
+const FORBIDDEN_EXTRA_HEADERS = new Set([
+  "host",
+  "connection",
+  "keep-alive",
+  "content-length",
+  "transfer-encoding",
+  "te",
+  "trailer",
+  "upgrade",
+  "forwarded",
+  "via",
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-forwarded-proto",
+  "x-real-ip",
+  "proxy-authorization",
+  "proxy-connection",
+  "x-o4w-headers",
+  "x-o4w-proxy",
 ]);
 
 const DROP_RESPONSE_HEADERS = new Set([
@@ -187,18 +211,51 @@ export function createProxy(config = loadConfig()) {
   // ---------------------------------------------------------------------------
   // HTTP
 
-  async function readBody(req) {
+  async function readBody(req, keys, signal) {
     const max = config.limits.maxRequestBody;
     const declared = Number(req.headers["content-length"] || 0);
     if (declared > max) throw new HttpError(413, "Request body too large");
     const chunks = [];
     let size = 0;
-    for await (const c of req) {
-      size += c.length;
-      if (size > max) throw new HttpError(413, "Request body too large");
-      chunks.push(c);
+    const onAbort = () => req.destroy();
+    signal?.addEventListener("abort", onAbort, { once: true });
+    try {
+      for await (const c of req) {
+        if (signal?.aborted) throw new HttpError(504, "Upstream timed out");
+        size += c.length;
+        if (size > max) throw new HttpError(413, "Request body too large");
+        if (!keys.every((k) => limiter.addBytes(k, c.length))) throw new HttpError(429, "Transfer quota exceeded");
+        chunks.push(c);
+      }
+    } finally {
+      signal?.removeEventListener("abort", onAbort);
     }
     return Buffer.concat(chunks);
+  }
+
+  async function readBoundedText(webBody, maxBytes, keys) {
+    const reader = webBody.getReader();
+    const chunks = [];
+    let size = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        size += value.byteLength;
+        if (size > maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw new HttpError(502, "Upstream response too large");
+        }
+        if (!keys.every((k) => limiter.addBytes(k, value.byteLength))) {
+          await reader.cancel().catch(() => {});
+          throw new HttpError(429, "Transfer quota exceeded");
+        }
+        chunks.push(value);
+      }
+    } finally {
+      reader.releaseLock();
+    }
+    return Buffer.concat(chunks).toString("utf8");
   }
 
   function buildHeaders(req, target) {
@@ -215,10 +272,15 @@ export function createProxy(config = loadConfig()) {
       } catch {
         throw new HttpError(400, "Malformed X-O4W-Headers");
       }
-      for (const [k, v] of Object.entries(parsed || {})) {
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new HttpError(400, "Malformed X-O4W-Headers");
+      }
+      for (const [k, v] of Object.entries(parsed)) {
         const key = k.toLowerCase();
-        if (["host", "content-length", "transfer-encoding", "connection"].includes(key)) continue;
-        out[key] = String(v);
+        if (!HEADER_NAME_RE.test(key) || FORBIDDEN_EXTRA_HEADERS.has(key)) continue;
+        const val = String(v);
+        if (/[\r\n\0]/.test(val)) throw new HttpError(400, "Invalid header value");
+        out[key] = val;
       }
     }
     if (OBSIDIAN_HOST.test(target.hostname) && !out.origin) out.origin = OBSIDIAN_ORIGIN;
@@ -229,18 +291,30 @@ export function createProxy(config = loadConfig()) {
   async function fetchFollowing(target, init, kind) {
     let url = target;
     let { method, body } = init;
+    const headers = { ...init.headers };
     for (let hop = 0; ; hop++) {
-      const res = await undiciFetch(url, { ...init, method, body, redirect: "manual", dispatcher: agent });
+      const res = await undiciFetch(url, { ...init, headers, method, body, redirect: "manual", dispatcher: agent });
       if (![301, 302, 303, 307, 308].includes(res.status)) return { res, finalUrl: url };
       const loc = res.headers.get("location");
       await res.body?.cancel().catch(() => {});
       if (!loc) return { res, finalUrl: url };
       if (hop >= config.limits.maxRedirects) throw new HttpError(508, "Too many redirects");
-      url = policy.checkUrl(new URL(loc, url).href, kind);
+      const nextUrl = policy.checkUrl(new URL(loc, url).href, kind);
+      if (nextUrl.origin !== url.origin) {
+        delete headers.authorization;
+        delete headers.cookie;
+        delete headers["proxy-authorization"];
+        delete headers.origin;
+        if (OBSIDIAN_HOST.test(nextUrl.hostname)) headers.origin = OBSIDIAN_ORIGIN;
+      }
       if (res.status === 303 || ((res.status === 301 || res.status === 302) && method === "POST")) {
         method = "GET";
         body = undefined;
+        delete headers["content-type"];
+        delete headers["content-length"];
+        delete headers["content-encoding"];
       }
+      url = nextUrl;
     }
   }
 
@@ -275,7 +349,7 @@ export function createProxy(config = loadConfig()) {
     try {
       const target = policy.checkUrl(u.searchParams.get("url") || "", pageMode ? "page" : "http");
       const headers = buildHeaders(req, target);
-      const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req);
+      const body = req.method === "GET" || req.method === "HEAD" ? undefined : await readBody(req, keys, abort.signal);
       const { res: upstream, finalUrl } = await fetchFollowing(
         target,
         { method: req.method, headers, body: body && body.length ? body : undefined, signal: abort.signal },
@@ -283,8 +357,9 @@ export function createProxy(config = loadConfig()) {
       );
       log(req.method, target.href, "→", upstream.status);
 
+      const maxBody = pageMode ? Math.min(config.limits.maxResponseBody, MAX_PAGE_HTML_BYTES) : config.limits.maxResponseBody;
       const declared = Number(upstream.headers.get("content-length") || 0);
-      if (declared > config.limits.maxResponseBody) {
+      if (declared > maxBody) {
         await upstream.body?.cancel().catch(() => {});
         throw new HttpError(502, "Upstream response too large");
       }
@@ -306,8 +381,7 @@ export function createProxy(config = loadConfig()) {
 
       const contentType = upstream.headers.get("content-type") || "";
       if (pageMode && /text\/html/i.test(contentType) && upstream.body) {
-        const text = await upstream.text();
-        limiter.addBytes(keys[0], text.length);
+        const text = await readBoundedText(upstream.body, maxBody, keys);
         delete out["X-O4W-Content-Length"];
         res.writeHead(status, out);
         res.end(injectBridge(text, finalUrl.href));
@@ -385,8 +459,11 @@ export function createProxy(config = loadConfig()) {
     server.on("upgrade", (req, socket, head) => {
       const u = new URL(req.url, "http://localhost");
       if (u.pathname !== "/__wsproxy" && u.pathname !== "/__wsproxy/") return;
+      socket.on("error", () => socket.destroy());
       const reject = (code, text) => {
-        socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`);
+        if (!socket.destroyed && socket.writable) {
+          socket.write(`HTTP/1.1 ${code} ${text}\r\nConnection: close\r\n\r\n`);
+        }
         socket.destroy();
       };
       if (config.mode === "off") return reject(404, "Not Found");
@@ -427,7 +504,18 @@ export function createProxy(config = loadConfig()) {
         handshakeTimeout: 15e3,
       });
       let client = null;
+      socket.on("close", () => {
+        release();
+        if (upstream.readyState === WebSocket.CONNECTING || upstream.readyState === WebSocket.OPEN) {
+          upstream.terminate();
+        }
+      });
       upstream.on("open", () => {
+        if (socket.destroyed || !socket.readable || !socket.writable) {
+          release();
+          upstream.terminate();
+          return;
+        }
         wss.handleUpgrade(req, socket, head, (ws) => {
           client = ws;
           log("ws open", target.href);

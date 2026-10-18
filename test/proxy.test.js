@@ -7,7 +7,7 @@ import { createProxy } from "../server/proxy.js";
 import { loadConfig } from "../server/config.js";
 import { isPrivateAddress, createPolicy } from "../server/policy.js";
 
-let upstream, upstreamUrl, proxyServer, base, limitedServer, limitedBase;
+let upstream, upstreamUrl, secondUpstream, secondUpstreamUrl, proxyServer, base, limitedServer, limitedBase;
 
 function listen(server) {
   return new Promise((r) => server.listen(0, "127.0.0.1", () => r(`http://127.0.0.1:${server.address().port}`)));
@@ -23,19 +23,48 @@ function makeProxyServer(env) {
 }
 
 before(async () => {
+  secondUpstream = http.createServer((req, res) => {
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        auth: req.headers.authorization || null,
+        cookie: req.headers.cookie || null,
+        xff: req.headers["x-forwarded-for"] || null,
+      }),
+    );
+  });
+  secondUpstreamUrl = await listen(secondUpstream);
+
   upstream = http.createServer((req, res) => {
     if (req.url === "/redirect-out") return res.writeHead(302, { Location: "http://localhost:1/secret" }).end();
     if (req.url === "/redirect-in") return res.writeHead(302, { Location: "/hello" }).end();
+    if (req.url === "/redirect-cross") return res.writeHead(302, { Location: secondUpstreamUrl + "/echo" }).end();
     if (req.url === "/big") {
       res.writeHead(200, { "Content-Length": String(5 * 1048576) });
       return res.end(Buffer.alloc(5 * 1048576));
     }
+    if (req.url === "/big-html-chunked") {
+      res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
+      res.write("<!doctype html><head></head><body>");
+      res.end("x".repeat(2 * 1048576));
+      return;
+    }
     res.writeHead(200, { "Content-Type": "text/plain", "X-Echo-Origin": req.headers.origin || "", "Set-Cookie": "a=b" });
-    res.end("hello " + req.method + " " + (req.headers["user-agent"] || ""));
+    res.end(
+      "hello " +
+        req.method +
+        " " +
+        (req.headers["user-agent"] || "") +
+        (req.headers["x-forwarded-for"] ? " xff=" + req.headers["x-forwarded-for"] : ""),
+    );
   });
   upstreamUrl = await listen(upstream);
   // Upstream is on loopback, so allow private addresses but only that exact host.
-  proxyServer = makeProxyServer({ O4W_PROXY_ALLOW_PRIVATE: "1", O4W_PROXY_ALLOW_HOSTS: "127.0.0.1", O4W_MAX_RESPONSE_MB: "1" });
+  proxyServer = makeProxyServer({
+    O4W_PROXY_ALLOW_PRIVATE: "1",
+    O4W_PROXY_ALLOW_HOSTS: "127.0.0.1",
+    O4W_MAX_RESPONSE_MB: "1",
+  });
   base = await listen(proxyServer);
   limitedServer = makeProxyServer({ O4W_PROXY_ALLOW_PRIVATE: "1", O4W_PROXY_ALLOW_HOSTS: "127.0.0.1", O4W_RATE_LIMIT_RPM: "3" });
   limitedBase = await listen(limitedServer);
@@ -43,6 +72,7 @@ before(async () => {
 
 after(() => {
   upstream.close();
+  secondUpstream.close();
   proxyServer.close();
   limitedServer.close();
 });
@@ -56,13 +86,42 @@ async function session(b = base) {
 const relay = (b, url, headers = {}) =>
   fetch(`${b}/__proxy?url=${encodeURIComponent(url)}`, { headers: { "Sec-Fetch-Site": "same-origin", "X-O4W-Proxy": "1", ...headers }, redirect: "manual" });
 
-test("private address detection", () => {
-  for (const ip of ["127.0.0.1", "10.1.2.3", "172.20.0.1", "192.168.1.1", "169.254.169.254", "100.64.0.1", "0.0.0.0", "::1", "fd00::1", "fe80::1", "::ffff:127.0.0.1", "224.0.0.1"])
+test("private address detection (IPv4 and canonical/non-canonical IPv6)", () => {
+  for (const ip of [
+    "127.0.0.1",
+    "10.1.2.3",
+    "172.20.0.1",
+    "192.168.1.1",
+    "169.254.169.254",
+    "100.64.0.1",
+    "0.0.0.0",
+    "::",
+    "::1",
+    "0:0:0:0:0:0:0:1",
+    "0:0:0:0:0:0:0:0",
+    "fd00::1",
+    "fe80::1",
+    "fe80::1%lo0",
+    "::ffff:127.0.0.1",
+    "0:0:0:0:0:ffff:127.0.0.1",
+    "0:0:0:0:0:ffff:7f00:1",
+    "::127.0.0.1",
+    "::7f00:1",
+    "::ffff:0:127.0.0.1",
+    "64:ff9b::127.0.0.1",
+    "2002:7f00:1::",
+    "2001::1",
+    "2001:db8::1",
+    "224.0.0.1",
+  ]) {
     assert.equal(isPrivateAddress(ip), true, ip);
-  for (const ip of ["1.1.1.1", "140.82.112.3", "2606:4700::1111"]) assert.equal(isPrivateAddress(ip), false, ip);
+  }
+  for (const ip of ["1.1.1.1", "140.82.112.3", "2606:4700::1111", "::ffff:1.1.1.1", "0:0:0:0:0:ffff:101:101"]) {
+    assert.equal(isPrivateAddress(ip), false, ip);
+  }
 });
 
-test("policy: allowlist, private destinations, protocols", () => {
+test("policy: allowlist, private destinations, trailing dots, protocols", () => {
   const p = createPolicy(loadConfig({ O4W_SECRET: "x" }));
   assert.ok(p.checkUrl("https://api.obsidian.md/x", "http"));
   assert.ok(p.checkUrl("https://github.com/a/b", "http"));
@@ -70,12 +129,19 @@ test("policy: allowlist, private destinations, protocols", () => {
   assert.throws(() => p.checkUrl("http://127.0.0.1/", "http"), /Private/);
   assert.throws(() => p.checkUrl("http://169.254.169.254/latest/meta-data", "http"), /Private/);
   assert.throws(() => p.checkUrl("http://localhost:8080/", "http"), /Private/);
+  assert.throws(() => p.checkUrl("http://localhost.:8080/", "http"), /Private/);
+  assert.throws(() => p.checkUrl("http://svc.internal./", "http"), /Private/);
+  assert.throws(() => p.checkUrl("http://0x7f.1./", "http"), /Private/);
+  assert.throws(() => p.checkUrl("http://[::127.0.0.1]/", "http"), /Private/);
+  assert.throws(() => p.checkUrl("http://[2002:7f00:1::]/", "http"), /Private/);
   assert.throws(() => p.checkUrl("file:///etc/passwd", "http"), /protocol/);
   assert.throws(() => p.checkUrl("https://user:pw@github.com/", "http"), /Credentials/);
   assert.throws(() => p.checkUrl("https://obsidian.md.evil.example/", "http"), /not allowed/);
   const open = createPolicy(loadConfig({ O4W_SECRET: "x", O4W_PROXY_MODE: "open" }));
   assert.ok(open.checkUrl("https://evil.example/", "http"));
   assert.throws(() => open.checkUrl("http://10.0.0.1/", "http"), /Private/);
+  assert.throws(() => open.checkUrl("http://localhost./", "http"), /Private/);
+  assert.throws(() => open.checkUrl("http://[::127.0.0.1]/", "http"), /Private/);
 });
 
 test("safe lookup refuses hostnames resolving to private addresses", async () => {
@@ -98,15 +164,18 @@ test("session is only issued to same-origin pages", async () => {
   await session();
 });
 
-test("relay requires header, same-site and a valid session", async () => {
+test("relay requires header, same-site and a valid session, and blocks forwarding header smuggling", async () => {
   const cookie = await session();
   const url = upstreamUrl + "/hello";
-  assert.equal((await relay(base, url, { "X-O4W-Proxy": "" , Cookie: cookie })).status, 403);
+  assert.equal((await relay(base, url, { "X-O4W-Proxy": "", Cookie: cookie })).status, 403);
   assert.equal((await relay(base, url, { Origin: "https://evil.example", Cookie: cookie })).status, 403);
   assert.equal((await relay(base, url, { "Sec-Fetch-Site": "cross-site", Cookie: cookie })).status, 403);
   assert.equal((await relay(base, url)).status, 401);
   assert.equal((await relay(base, url, { Cookie: "o4w_session=forged.token" })).status, 401);
-  const ok = await relay(base, url, { Cookie: cookie, "X-O4W-Headers": encodeURIComponent(JSON.stringify({ "User-Agent": "Obsidian" })) });
+  const ok = await relay(base, url, {
+    Cookie: cookie,
+    "X-O4W-Headers": encodeURIComponent(JSON.stringify({ "User-Agent": "Obsidian", "X-Forwarded-For": "1.2.3.4" })),
+  });
   assert.equal(ok.status, 200);
   assert.equal(await ok.text(), "hello GET Obsidian");
   assert.equal(ok.headers.get("set-cookie"), null, "upstream cookies are not passed on");
@@ -118,19 +187,29 @@ test("destinations outside the allowlist are refused", async () => {
   assert.equal((await relay(base, "https://example.com/", { Cookie: cookie })).status, 403);
 });
 
-test("redirects are re-checked against the policy", async () => {
+test("redirects are re-checked against policy and strip credentials across origins", async () => {
   const cookie = await session();
   const inside = await relay(base, upstreamUrl + "/redirect-in", { Cookie: cookie });
   assert.equal(inside.status, 200);
   assert.match(await inside.text(), /^hello/);
   const outside = await relay(base, upstreamUrl + "/redirect-out", { Cookie: cookie });
   assert.equal(outside.status, 403);
+  const cross = await relay(base, upstreamUrl + "/redirect-cross", {
+    Cookie: cookie,
+    "X-O4W-Headers": encodeURIComponent(JSON.stringify({ Authorization: "Bearer secret", Cookie: "s=1" })),
+  });
+  assert.equal(cross.status, 200);
+  assert.deepEqual(await cross.json(), { auth: null, cookie: null, xff: null });
 });
 
-test("response size is capped", async () => {
+test("response size is capped for both normal relay and chunked page-mode HTML", async () => {
   const cookie = await session();
   const r = await relay(base, upstreamUrl + "/big", { Cookie: cookie });
   assert.equal(r.status, 502);
+  const page = await fetch(`${base}/__proxy?mode=page&url=${encodeURIComponent(upstreamUrl + "/big-html-chunked")}`, {
+    headers: { Cookie: cookie, "Sec-Fetch-Site": "same-origin", "Sec-Fetch-Dest": "iframe" },
+  });
+  assert.equal(page.status, 502);
 });
 
 test("rate limiting", async () => {

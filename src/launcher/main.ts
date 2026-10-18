@@ -43,7 +43,14 @@ function writeConfig(fn: (c: Config) => void) {
 
 function nextUrl(): string {
   const next = params.get("next");
-  if (next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\")) return next;
+  if (next && next.startsWith("/") && !next.startsWith("//") && !next.startsWith("/\\")) {
+    try {
+      const u = new URL(next, location.origin);
+      if (u.origin === location.origin) return u.pathname + u.search + u.hash;
+    } catch {
+      /* ignore */
+    }
+  }
   // Direct visit to an app URL without the service worker: the server served the launcher.
   if (location.pathname !== "/" && location.pathname !== "/index.html") return location.pathname + location.search;
   if (location.pathname === "/index.html" && location.search) return location.pathname + location.search;

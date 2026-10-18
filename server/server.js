@@ -106,6 +106,10 @@ server.headersTimeout = 30e3;
 server.requestTimeout = 0; // long transfers (proxy) are bounded by the proxy's own timeouts
 server.keepAliveTimeout = 65e3;
 proxy.attach(server);
+server.on("upgrade", (req, socket) => {
+  const u = new URL(req.url, "http://localhost");
+  if (u.pathname !== "/__wsproxy" && u.pathname !== "/__wsproxy/") socket.destroy();
+});
 server.listen(port, host, () => {
   console.log(`obsidian4web on http://${host === "0.0.0.0" ? "localhost" : host}:${port}  (proxy: ${config.mode}${config.webviewer ? ", web viewer" : ""})`);
 });

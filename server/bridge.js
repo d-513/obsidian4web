@@ -56,9 +56,11 @@ const BRIDGE = `(() => {
   });
 })();`;
 
+const escAttr = (s) => s.replace(/[&<>"]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" })[c]);
+
 export function injectBridge(html, realUrl) {
   const head =
-    `<base href="${realUrl.replace(/"/g, "&quot;")}">` +
+    `<base href="${escAttr(realUrl)}">` +
     `<script>${BRIDGE.replace("__REAL_URL__", () => JSON.stringify(realUrl).replace(/</g, "\\u003c"))}</script>`;
   // Neutralise <meta http-equiv=Content-Security-Policy> (it would block the bridge) and existing <base>.
   html = html.replace(/<meta[^>]+http-equiv=["']?content-security-policy["']?[^>]*>/gi, "").replace(/<base\b[^>]*>/gi, "");

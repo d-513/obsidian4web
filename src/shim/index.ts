@@ -68,6 +68,12 @@ function safeJson(v: unknown): string {
 const nativeOpen = window.open.bind(window);
 const STANDARD_FEATURES = new Set(["popup", "width", "height", "left", "top", "x", "y", "screenx", "screeny", "innerwidth", "innerheight", "noopener", "noreferrer"]);
 window.open = function (url?: string | URL, target?: string, features?: string) {
+  const href = url === undefined ? "" : String(url);
+  const external = externalUrl(href, target);
+  if (external) {
+    openExternalUrl(external);
+    return null;
+  }
   // Electron-only features (background=, parented=) make Chrome return null.
   if (features) {
     features = features
@@ -77,7 +83,6 @@ window.open = function (url?: string | URL, target?: string, features?: string) 
       .join(",");
   }
   const w = nativeOpen(url, target, features);
-  const href = url === undefined ? "" : String(url);
   if (w && (href === "" || href === "about:blank")) {
     try {
       setupWindow(w as AnyWin);
@@ -88,6 +93,42 @@ window.open = function (url?: string | URL, target?: string, features?: string) 
   }
   return w;
 } as typeof window.open;
+
+/** Cross-origin http(s)/mailto URLs opened in a new window: Electron hands these to the system browser. */
+function externalUrl(href: string, target?: string): string | null {
+  if (target === "_self" || target === "_parent" || target === "_top") return null;
+  let u: URL;
+  try {
+    u = new URL(href, location.href);
+  } catch {
+    return null;
+  }
+  if (u.protocol === "mailto:") return u.href;
+  if ((u.protocol === "http:" || u.protocol === "https:") && u.origin !== location.origin) return u.href;
+  return null;
+}
+
+// Electron opens these without a user gesture. Plugins often await a request first (e.g.
+// Seafile's SSO login link), by which time the browser's popup blocker refuses the tab,
+// so when the click's activation has lapsed we ask for one more click.
+function openExternalUrl(url: string): void {
+  const activation = (navigator as { userActivation?: { isActive: boolean } }).userActivation;
+  if (!activation || activation.isActive) {
+    nativeOpen(url, "_blank", "noopener,noreferrer");
+    return;
+  }
+  void showModal({
+    title: "Open link",
+    message: "Open this page in a new tab?",
+    detail: url.length > 300 ? url.slice(0, 300) + "…" : url,
+    buttons: [
+      { text: "Open", cta: true, value: 0 },
+      { text: "Cancel", value: 1 },
+    ],
+  }).then((r) => {
+    if (r.response === 0) nativeOpen(url, "_blank", "noopener,noreferrer");
+  });
+}
 
 // Starter/vault switching calls window.close() right after asking to open another vault.
 const nativeClose = window.close.bind(window);
